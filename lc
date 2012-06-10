@@ -1,0 +1,1126 @@
+#!/usr/bin/env python
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import os, re, sys, time, copy, ConfigParser, json, libcloud
+from optparse import OptionParser, HelpFormatter
+from collections import OrderedDict
+
+from libcloud.dns.base import Zone, Record
+from libcloud.dns.providers import get_driver as get_driver_dns
+from libcloud.dns.types import Provider as Provider_DNS, RecordType
+
+from libcloud.loadbalancer.base import LoadBalancer, Algorithm, Member
+from libcloud.loadbalancer.providers import get_driver as get_driver_balancer
+from libcloud.loadbalancer.types import Provider as Provider_Balancer, State
+
+from libcloud.compute.deployment import MultiStepDeployment, ScriptDeployment, SSHKeyDeployment
+from libcloud.compute.providers import get_driver as get_driver_compute
+from libcloud.compute.types import Provider as Provider_Compute, NodeState
+
+import libcloud.security
+
+########################
+
+class Skynet(object):
+	"""
+	lc is a libcloud python cli tool
+
+	Usage: %prog <command> [options|arguments] ...
+
+	Commands:
+	  [GENERAL]
+	  help <command>           Return detailed help on command
+
+	  [DNS]
+	  list-zones               List DNS zones
+	  list-zone-records        List DNS zone records
+	  create-zone              Create DNS zone
+	  create-zone-record       Create DNS zone record
+	  
+	  [BALANCER]
+	  list-protocols           List balancer protocols
+	  list-balancers           List all balancers
+	  list-balancer-members    List all balancer members
+	  create-balancer          Create balancer
+	  balancer-node-attach     Attach compute node to balancer
+	  balancer-member-attach   Attach member to balancer
+	  balancer-member-detach   Detach member from balancer
+	  destroy-balancer         Destroy balancer
+
+	  [COMPUTE]
+	  find-node                Find an existing node by name
+	  list-locations           List supported cloud locations
+	  list-sizes               List all valid server sizes
+	  list-images              List all available server images
+	  list-nodes               List all existing nodes
+	  create-node              Create a new node
+	  deploy-node              Create, deploy and bootstrap a new node with custom ssh key
+	  destroy-node             Destroy an existing node
+
+	  [STORAGE]
+	  ...
+	"""
+
+	### MAP for cloud resources
+
+	record_type_map = {
+		RecordType.A: 'a',
+		RecordType.AAAA: 'aaaa',
+		RecordType.MX: 'mx',
+		RecordType.NS: 'ns',
+		RecordType.CNAME: 'cname',
+		RecordType.DNAME: 'dname',
+		RecordType.TXT: 'txt',
+		RecordType.PTR: 'ptr',
+		RecordType.SOA: 'soa',
+		RecordType.SPF: 'spf',
+		RecordType.SRV: 'srv',
+		RecordType.PTR: 'ptr',
+		RecordType.NAPTR: 'naptr',
+		RecordType.REDIRECT: 'redirect'
+	}
+
+	loadbalancer_state_map = {
+		State.RUNNING: 'running',
+		State.PENDING: 'pending',
+		State.UNKNOWN: 'unknown'
+	}
+
+	compute_state_map = {
+		NodeState.RUNNING: 'running',
+		NodeState.REBOOTING: 'rebooting',
+		NodeState.TERMINATED: 'terminated',
+		NodeState.PENDING: 'pending',
+		NodeState.UNKNOWN: 'unknown',
+	}
+
+	### DNS: dynamic dns methods
+
+	def cmd_list_zones(self, options, arguments):
+		"""
+		List all zones.
+
+		Usage: %prog [options] list-zones
+		"""
+		try:
+			zones = self.connection_dns.list_zones()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		self.succeed(data=zones, data_type='zone')
+
+	def cmd_list_zone_records(self, options, arguments):
+		"""
+		List all records for a given zone.
+
+		Usage: %prog [options] list-records (-n zone_name | -I id)
+		"""
+
+		# TODO
+		# if options.name not null
+		#   zone = self.find_zone(options.name)
+		# else if options.id not null
+		#   zone = selt.connection_dns.get_zone(self, options.id
+		# else
+		#   self.fail("list-zone-records requires the domain_name or id as arguments.")
+
+		if options.name is None and options.id is None:
+			self.fail("list-zone-records requires the zone_name or id as arguments.")
+
+		zone = self.find_zone(options.name)
+
+		try:
+			records = self.connection_dns.list_records(zone)
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=records, data_type='zone_record')
+
+	### BALANCER: dynamic balancer methods
+
+	def cmd_list_protocols(self, options, arguments):
+		"""
+		List all balancer protocols.
+
+		Usage: %prog [options] list-protocols
+		"""
+		try:
+			protocols = self.connection_balancer.list_protocols()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		self.succeed(data=protocols)
+
+	def cmd_list_balancers(self, options, arguments):
+		"""
+		Fetch a list of all registered balancers.
+
+		Usage: %prog [options] list-balancers
+		"""
+		try:
+			balancers = self.connection_balancer.list_balancers()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=balancers, data_type='balancer')
+
+	def cmd_list_balancer_members(self, options, arguments):
+		"""
+		Fetch a list of all balancer members from balancer name or id.
+
+		Usage: %prog [options] list-balancer-members (-n name | -I id)
+		"""
+		if options.name is None and options.id is None:
+			self.fail("list-balancer-members requires the name or id as arguments.")
+
+		balancer = self.wait_for_running_balancer(options.name)
+
+		try:
+			members = self.connection_balancer.balancer_list_members(balancer)
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=members, data_type='balancer_member')
+
+	def cmd_create_balancer(self, options, arguments):
+		"""
+		Create balancer
+
+		Usage: %prog [options] create-balancer -n name -p port [-P protocol] [-a algorithm] addr1:port1 addr2:port2 ...
+		"""
+		members = []
+		for member in arguments:
+			addr, port = member.split(":")
+			members.append(Member(None, addr, port))
+
+		if options.name is None or len(members) == 0:
+			self.fail("create-balancer requires the name and port along with addr:port as arguments.")
+
+		try:
+			balancer = self.connection_balancer.create_balancer(name=options.name, port=options.port, protocol=options.protocol, algorithm=Algorithm.LEAST_CONNECTIONS, members=members)
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=balancer, data_type='balancer')
+
+	def cmd_balancer_node_attach(self, options, arguments):
+		"""
+		Attach node to balancer
+
+		Usage: %prog [options] balancer-node-attach -n balancer_name -m node_name
+		"""
+		if options.name is None and options.member is None:
+			self.fail("balancer-node-attach requires the balancer name and node name as arguments.")
+
+		balancer = self.wait_for_running_balancer(options.name)
+		node = self.wait_for_running_node(options.member)
+
+		try:
+			#self.connection_balancer.balancer_attach_compute_node(balancer=balancer, node=node)
+			balancer.attach_compute_node(node=node)
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		self.succeed(data=balancer, data_type='balancer')
+
+	def cmd_balancer_member_attach(self, options, arguments):
+		"""
+		Usage: %prog [options] balancer-member-attach -n name addr:port
+		"""
+		members = []
+		for member in arguments:
+			addr, port = member.split(":")
+			members.append(Member(None, addr, port))
+
+		if options.name is None and len(members) == 0:
+			self.fail("balancer-member-attach requires the name along with addr:port as arguments.")
+
+		balancer = self.wait_for_running_balancer(options.name)
+
+		try:
+			#self.connection_balancer.balancer_attach_member(balancer=balancer, member=members[0])
+			balancer.attach_member(member=members[0])
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		self.succeed(data=balancer, data_type='balancer')
+
+	def cmd_balancer_member_detach(self, options, arguments):
+		"""
+		Usage: %prog [options] balancer-member-detach -n name addr:port
+		"""
+		members = []
+		for member in arguments:
+			addr, port = member.split(":")
+			members.append(Member(None, addr, port))
+
+		if options.name is None and len(members) == 0:
+			self.fail("balancer-member-detach requires the name along with addr:port as arguments.")
+
+		balancer = self.wait_for_running_balancer(options.name)
+
+		try:
+			#self.connection_balancer.balancer_attach_member(balancer=balancer, member=members[0])
+			balancer.detach_member(member=members[0])
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		self.succeed(data=balancer, data_type='balancer')
+
+	def cmd_destroy_balancer(self, options, arguments):
+		"""
+		Destroy balancer
+
+		Usage: %prog [options] destroy-balancer -n name
+		"""
+		if options.name is None and options.id is None:
+			self.fail("destroy-balancer requires the name or id as arguments.")
+
+		balancer = self.wait_for_running_balancer(options.name)
+
+		if not balancer:
+			self.fail("No running balancer found with name \"%s\"" % options.name)
+		elif self.connection_balancer.destroy_balancer(balancer):
+			self.succeed(message="Balancer \"%s\" destroyed!" % options.name)
+		else:
+			self.fail("Could not destroy balancer \"%s\"" % options.name)
+
+	### COMPUTE: dynamic compute methods
+
+	def cmd_find_node(self, options, arguments):
+		"""
+		Find a single node by name and print its details.
+
+		Usage: %prog [options] find-node <name>
+		"""
+		if options.name is None:
+			self.fail("find-node requires the name of the node")
+
+		if self.options.wait:
+			node = self.wait_for_running_node(options.name, timeout=self.options.wait)
+		else:
+			node = self.find_node(options.name)
+
+		if node:
+			self.succeed(data=node, data_type='node')
+		else:
+			self.fail("No node found with name \"%s\"" % options.name)
+
+	def cmd_list_locations(self, options, arguments):
+		"""
+		Fetch a list of locations.
+
+		Usage: %prog [options] list-locations
+		"""
+		try:
+			locations = self.connection_compute.list_locations()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=locations)
+
+	def cmd_list_sizes(self, options, arguments):
+		"""
+		Fetch a list of all available server sizes.
+
+		Usage: %prog [options] list-sizes
+		"""
+		try:
+			sizes = self.connection_compute.list_sizes()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=sizes, data_type='size')
+
+	def cmd_list_images(self, options, arguments):
+		"""
+		Fetch a list of all available server images.
+
+		Usage: %prog [options] list-images
+		"""
+		try:
+			images = self.connection_compute.list_images()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=images, data_type='image')
+
+	def cmd_list_nodes(self, options, arguments):
+		"""
+		Fetch a list of all registered nodes.
+
+		Usage: %prog [options] list-nodes
+		"""
+		try:
+			nodes = self.connection_compute.list_nodes()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+	
+		self.succeed(data=nodes, data_type='node')
+
+	def cmd_create_node(self, options, arguments):
+		"""
+		Create a new node and print its details. If a node with the same name already existed, print its details instead.
+
+		Usage: %prog [options] create-node --name <fqdn>
+		"""
+		if options.name is None:
+			self.fail("create-node requires the name of the node to create")
+
+		options.name
+		node = self.find_node(options.name)
+		if (node):
+			self.succeed(message="Node \"%s\" already exists!" % options.name, data=node)
+
+		image = self.find_image(options.image)
+		if (not image):
+			print options.image
+			self.fail("Missing or invalid image type provided.")
+
+		size = self.find_size(options.size)
+		if (not size):
+			print options.size
+			self.fail("Missing or invalid node size provided.")
+
+		try:
+			node = self.connection_compute.create_node(name=options.name, image=image, size=size)
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		if self.options.wait:
+			running_node = self.wait_for_running_node(options.name, timeout=self.options.wait)
+		else:
+			running_node = None
+
+		if (node):
+			if (running_node): node.state = running_node.state
+			self.succeed(message="Node \"%s\" created!" % options.name, data=node, data_type='node')
+
+	def cmd_deploy_node(self, options, arguments):
+		"""
+		Create, deploy and bootstrap a new node and print its details. If a node with the same name already existed, print its details instead.
+
+		Usage: %prog [options] deploy-node --name <fqdn>
+		"""
+		if options.name is None:
+			self.fail("deploy-node requires the name of the node to create")
+
+		node = self.find_node(options.name)
+		if (node):
+			self.succeed(message="Node \"%s\" already exists!" % options.name, data=node)
+
+		image = self.find_image(options.image)
+		if (not image):
+			print options.image
+			self.fail("Missing or invalid image type provided.")
+
+		size = self.find_size(options.size)
+		if (not size):
+			print options.size
+			self.fail("Missing or invalid node size provided.")
+
+		# read your public key in
+		# Note: This key will be added to root's authorized_keys
+		# (/root/.ssh/authorized_keys)
+		sd = SSHKeyDeployment(open(os.path.expanduser(options.public_key)).read())
+
+		# a simple script to install puppet post boot, can be much more complicated.
+		script = ScriptDeployment(options.script)
+
+		# a task that first installs the ssh key, and then runs the script
+		msd = MultiStepDeployment([sd, script])
+
+		try:
+			# deploy our node using multistep deployment strategy
+			node = self.connection_compute.deploy_node(name=options.name, image=image, size=size, deploy=msd)
+
+			# gets the hostname and domainname from fqdn
+			hostname,domainname = options.name.split('.', 1)
+
+			# see if zone already exists
+			zone = self.find_zone(domainname)
+
+			# if zone instance does not exist, create it
+			if (not zone):
+				zone = self.connection_dns.create_zone(domain=domainname)
+
+			# create an A record type wth the public ip of the created node for our zone
+			record = zone.create_record(name=hostname, type=RecordType.A, data=node.public_ips[0])
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		# decide if we wanted to wait for a reference of the running node
+		if self.options.wait:
+			running_node = self.wait_for_running_node(options.name, timeout=self.options.wait)
+		else:
+			running_node = None
+
+		# if the node was created
+		if (node):
+			# if the running node exists set the node state to running 
+			if (running_node): node.state = running_node.state
+			self.succeed(message="Node \"%s\" deployed!" % options.name, data=node, data_type='node')
+
+	def cmd_destroy_node(self, options, arguments):
+		"""
+		Destroy a single node by name.
+
+		Usage: %prog [options] destroy-node --name <fqdn>
+		"""
+		if options.name is None:
+			self.fail("destroy-node requires the name of the node to destroy")
+
+		node = self.wait_for_running_node(options.name)
+
+		if not node:
+			self.fail("No running node found with name \"%s\"" % options.name)
+		elif node.destroy():
+			self.succeed(message="Node \"%s\" destroyed!" % options.name)
+		else:
+			self.fail("Could not destroy node \"%s\"" % options.name)
+
+	### HELP: cli help
+
+	def cmd_help(self, options, arguments):
+		"""
+		Return more detailed help on command
+
+		Usage: %prog [options] help <command>
+		"""
+		help_command = arguments.pop(0) if arguments else None
+		method = self.get_command_method(help_command)
+
+		if method:
+			self.parser.usage = method.__doc__
+		else:
+			self.parser.usage = self.__doc__
+
+		self.parser.print_help()
+
+	### HELPER: helper methods
+
+	def find_zone(self, name):
+		"""
+		Find a zone type object based on its name.
+		"""
+		try:
+			zones = self.connection_dns.list_zones()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		return next((zone for zone in zones if name == zone.domain), None)
+
+	def find_balancer(self, name):
+		"""
+		Find a balancer type object based on its name.
+		"""
+		try:
+			balancers = self.connection_balancer.list_balancers()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		return next((balancer for balancer in balancers if name == balancer.name), None)
+
+	def find_size(self, ram):
+		"""
+		Find a node size object based on its ram.
+		"""
+		try:
+			sizes = self.connection_compute.list_sizes()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		ram = int(ram)
+		return next((size for size in sizes if size.ram == ram), None)
+
+	def find_image(self, name):
+		"""
+		Find an image type object based on its name.
+		"""
+		try:
+			images = self.connection_compute.list_images()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		return next((image for image in images if name == image.name), None)
+
+	def find_node(self, name):
+		"""
+		Find a node object based on its name.
+		"""
+		try:
+			nodes = self.connection_compute.list_nodes()
+		except Exception as e:
+			self.fail("Exception: %s" % e)
+
+		return next((node for node in nodes if name == node.name), None)
+
+	def wait_for_running_balancer(self, name, poll_period=2, timeout=30):
+		"""
+		Find a balancer object based on its name, waiting for it to be running.
+
+		This method blocks up to timeout seconds until the node object is
+		confirmed to be running.  After the timeout, it may return a non-running
+		node, so you still need to check the state before performing
+		further operations on the node.
+		"""
+		elapsed_time = 0
+		while elapsed_time < timeout:
+			balancer = self.find_balancer(name)
+			if not balancer: return None
+			if balancer.state == 0: return balancer
+			time.sleep(poll_period)
+			elapsed_time = elapsed_time + poll_period
+		return balancer
+
+	def wait_for_running_node(self, name, poll_period=2, timeout=30):
+		"""
+		Find a node object based on its name, waiting for it to be running.
+
+		This method blocks up to timeout seconds until the node object is
+		confirmed to be running.  After the timeout, it may return a non-running
+		node, so you still need to check the state before performing
+		further operations on the node.
+		"""
+		elapsed_time = 0
+		while elapsed_time < timeout:
+			node = self.find_node(name)
+			if not node: return None
+			if node.state == 0: return node
+			time.sleep(poll_period)
+			elapsed_time = elapsed_time + poll_period
+		return node
+
+	### OUTPUT
+
+	def fail(self, message):
+		"""
+		Print an error message and stop execution with an error code.
+		"""
+		output = self.get_output(message=message)
+		self.print_formatted_output(output)
+		sys.exit(1)
+
+	def succeed(self, message=None, data=None, data_type="default"):
+		"""
+		Print a success message and any provided data, then stop execution.
+		"""
+		output = self.get_output(message=message, data=data, data_type=data_type)
+		self.print_formatted_output(output)
+		sys.exit(0)
+
+	def get_output(self, message=None, data=None, data_type="default"):
+		"""
+		Return a dictionary to be used as a content source for output.
+		"""
+		output = {}
+		if message: output['message'] = message
+
+		if data: output['data'] = []
+		if is_dict_like(data): data = [data]
+
+		if is_list_like(data):
+			for item in data:
+				output['data'].append(self.prepare_output_item(item, data_type))
+
+		return output
+
+	### MAPPING: format result
+
+	def prepare_output_item(self, item, data_type):
+		"""
+		Convert a single data item into a dictionary for our output dictionary.
+		"""
+		format_method_name = 'get_output_for_' + data_type
+		method = getattr(self, format_method_name)
+		if (method): return method(item)
+		else: return None
+
+	def get_output_for_default(self, obj):
+		"""
+		Default list.
+		"""
+		result = OrderedDict()
+		result['key'] = obj
+		return result
+
+	def get_output_for_zone(self, zone):
+		"""
+		Convert a single 'zone' data item into a dictionary for our output dictionary.
+		"""
+		values = zone.__dict__.copy()
+
+		result = OrderedDict()
+		result['id'] = values['id']
+		result['domain'] = values['domain']
+		result['type'] = values['type']
+		result['ttl'] = values['ttl']
+		result['extra'] = values['extra']
+		return result
+
+	def get_output_for_zone_record(self, record):
+		"""
+		"""
+		values = record.__dict__.copy()
+
+		result = OrderedDict()
+		result['id'] = values['id']
+		result['name'] = values['name']
+		result['type'] = self.record_type_map[values['type']]
+		result['data'] = values['data']
+		result['extra'] = values['extra']
+		return result
+
+	def get_output_for_balancer(self, balancer):
+		"""
+		Convert a single 'balancer' data item into a dictionary for our output dictionary.
+		"""
+		values = balancer.__dict__.copy()
+
+		result = OrderedDict()
+		result['id'] = values['id']
+		result['name'] = values['name']
+		result['ip'] = values['ip']
+		result['port'] = values['port']
+		result['state'] = self.loadbalancer_state_map[values['state']]
+		return result
+
+	def get_output_for_balancer_member(self, member):
+		"""
+		"""
+		values = member.__dict__.copy()
+
+		result = OrderedDict()
+		result['id'] = values['id']
+		result['ip'] = values['ip']
+		result['port'] = values['port']
+		return result
+
+	def get_output_for_size(self, size):
+		"""
+		Convert a single 'size' data item into a dictionary for our output dictionary.
+		"""
+		result = OrderedDict()
+		result["id"] = size.id
+		result["name"] = size.name
+		result["ram"] = size.ram
+		result["disk"] = size.disk
+		result["bandwidth"] = size.bandwidth
+		result["price"] = size.price
+		return result
+
+	def get_output_for_image(self, image):
+		"""
+		Convert a single 'image' data item into a dictionary for our output dictionary.
+		"""
+		result = OrderedDict()
+		result["id"] = image.id
+		result["name"] = image.name
+		return result
+
+	def get_output_for_node(self, node):
+		"""
+		Convert a single 'node' data item into a dictionary for our output dictionary.
+		"""
+		values = node.__dict__.copy()
+
+		result = OrderedDict()
+		#result['uuid'] = node.uuid
+		result['id'] = values['id']
+		result['name'] = values['name']
+		result['flavor_id'] = node.extra['flavorId']
+		result['image_id'] = node.extra['imageId']
+		result['state'] = self.compute_state_map[values['state']]
+		result['private_ips'] = values['private_ips']
+		result['public_ips'] = values['public_ips']
+		#result['password'] = node.extra['password']
+		return result
+
+	### PRINT: output
+
+	def print_formatted_output(self, output):
+		"""
+		Format and print our output dictionary.
+		"""
+		if self.options.human:
+			self.print_text_output(output)
+		elif self.options.json:
+			self.print_json_output(output)
+		else:
+			self.print_simple_output(output)
+
+	def print_simple_output(self, output):
+		"""
+		Print an output dictionary as text.
+		"""
+		if 'message' in output:
+			print output['message']
+
+		if 'data' in output and output['data']:
+			for item in output['data']:
+				self.print_line_item(item)
+
+	def print_json_output(self, output):
+		"""
+		Print an output dictionary as json.
+		"""
+		print json.dumps(output, indent=2, sort_keys=True)
+
+	def print_text_output(self, output):
+		"""
+		Print an output dictionary as text.
+		"""
+		if 'message' in output:
+			print output['message']
+
+		if 'data' in output and output['data']:
+			print "-----"
+			for item in output['data']:
+				self.print_item(item)
+
+	def print_line_item(self, item):
+		"""
+		Print a single data item from an output dictionary as text.
+		"""
+		print item.values()
+		
+
+	def print_item(self, item):
+		"""
+		Print a single data item from an output dictionary as text.
+		"""
+		for key in item.keys():
+			print "%s: %s" % (key, item[key])
+		print "-----"
+
+	### INIT
+
+	def __init__(self):
+		self.options, self.arguments = self.parse_args()
+		self.process_ini_files()
+		self.set_defaults_from_ini()
+
+	### INIT: args
+
+	def parse_args(self):
+		"""
+		Set up the cli options 
+		"""
+		formatter = DocstringHelpFormatter()
+		self.parser = OptionParser(usage='', version="%prog 1.10.1", formatter=formatter)
+
+		self.parser.add_option("--id", "-I",
+			help="ID for zone|balancer|compute node"
+		)
+
+		self.parser.add_option("--name", "-n",
+			help="Name for zone|balancer|compute node"
+		)
+
+		self.parser.add_option("--type", "-t",
+			help="Type of zone"
+		)
+
+		self.parser.add_option("--ttl", "-l",
+			type="int",
+			help="TTL of zone"
+		)
+
+		self.parser.add_option("--extra", "-e",
+			help="Extra attributes of zone"
+		)
+
+		self.parser.add_option("--port", "-p",
+			type="int",
+			help="Port of balancer"
+		)
+
+		self.parser.add_option("--member", "-m",
+			help="Node name of member"
+		)
+
+		self.parser.add_option("--protocol", "-P",
+			help="Protocol of balancer [default: http]"
+		)
+
+		self.parser.add_option("--algorithm", "-a",
+			help="Algorithm of balancer [default: round-robin]"
+		)
+
+		self.parser.add_option("--size", "-s",
+			type="int",
+			help="Size of image to create, as MB of RAM"
+		)
+
+		self.parser.add_option("--image", "-i",
+			help="Name of image to use"
+		)
+
+		self.parser.add_option("--wait", "-w",
+			metavar="SECONDS",
+			type="int",
+			help="When creating or finding nodes, wait up to WAIT seconds until the node is running before returning"
+		)
+
+		self.parser.add_option("--human",
+			action="store_true",
+			dest="human",
+			help="Return results in human readable format"
+		)
+
+		self.parser.add_option("--json",
+			action="store_true",
+			dest="json",
+			help="Return results in json format"
+		)
+
+		self.parser.add_option("--provider",
+			help="Cloud provider to use"
+		)
+
+		self.parser.add_option("--user",
+			help="API username or id"
+		)
+
+		self.parser.add_option("--key",
+			help="API key"
+		)
+
+		self.parser.add_option("--public_key",
+			help="Public key to deploy [default: %default]"
+		)
+
+		self.parser.add_option("--script",
+			help="Script to run for deployment"
+		)
+
+		self.parser.add_option("--config-file",
+			help="Path to a custom configuration file in ini format [default: %default]"
+		)
+
+		self.parser.set_defaults(
+			config_file='~/.libcloudrc',
+			public_key='~/.ssh/id_rsa.pub'
+		)
+
+		return self.parser.parse_args()
+
+	### INIT: config
+
+	def get_config_path(self):
+		"""
+		Retrieve the path to the config file.
+		"""
+		return os.path.expanduser(self.options.config_file)
+
+	def process_ini_files(self):
+		"""
+		Load any config files into our settings property.
+		"""
+		try:
+			config_path = self.get_config_path()
+			config = ConfigParser.RawConfigParser()
+			config.read(config_path)
+		except Exception as e:
+			self.fail("Failed to parse configuration file: %s" % e)
+
+		self.settings = {}
+
+		for section in config.sections():
+			self.settings[section] = {}
+			for item in config.items(section):
+				self.settings[section][item[0]] = item[1]
+
+	def set_defaults_from_ini(self):
+		"""
+		Apply defaults from our config files over any missing options.
+		"""
+
+		if not self.options.provider:
+			if 'default' in self.settings and 'provider' in self.settings['default']:
+				self.options.provider = self.settings['default']['provider']
+			else:
+				self.fail("No cloud provider setting was defined.")
+
+		provider_lc = self.options.provider.lower()
+
+		if not self.options.user:
+			if provider_lc in self.settings and 'user' in self.settings[provider_lc]:
+				self.options.user = self.settings[provider_lc]['user']
+			else:
+				self.fail("No user was defined for the cloud provider.")
+
+		if not self.options.key:
+			if provider_lc in self.settings and 'key' in self.settings[provider_lc]:
+				self.options.key = self.settings[provider_lc]['key']
+			else:
+				self.fail("No key was defined for the cloud provider.")
+
+		if not self.options.size:
+			if provider_lc in self.settings and 'default_size' in self.settings[provider_lc]:
+				self.options.size = self.settings[provider_lc]['default_size']
+
+		if not self.options.image:
+			if provider_lc in self.settings and 'default_image' in self.settings[provider_lc]:
+				self.options.image = self.settings[provider_lc]['default_image']
+
+		if not self.options.public_key:
+			if provider_lc in self.settings and 'default_public_key' in self.settings[provider_lc]:
+				self.options.public_key = self.settings[provider_lc]['default_public_key']
+
+		if not self.options.script:
+			if provider_lc in self.settings and 'default_deploy_script' in self.settings[provider_lc]:
+				self.options.script = self.settings[provider_lc]['default_deploy_script']
+
+	### INIT: drivers
+
+	def get_driver_dns(self):
+		"""
+		Get the libcloud driver based on the provider option.
+		"""
+		if hasattr(Provider_DNS, self.options.provider.upper() + "_US"):
+			return get_driver_dns(getattr(Provider_DNS, self.options.provider.upper() + "_US"))
+		else:
+			self.fail("Could not find cloud provider with name \"%s\"." % self.options.provider + "_US")
+
+	def get_driver_balancer(self):
+		"""
+		Get the libcloud driver based on the provider option.
+		"""
+		if hasattr(Provider_Balancer, self.options.provider.upper() + "_US"):
+			return get_driver_balancer(getattr(Provider_Balancer, self.options.provider.upper() + "_US"))
+		else:
+			self.fail("Could not find cloud provider with name \"%s\"." % self.options.provider + "_US")
+
+	def get_driver_compute(self):
+		"""
+		Get the libcloud driver based on the provider option.
+		"""
+		if hasattr(Provider_Compute, self.options.provider.upper()):
+			return get_driver_compute(getattr(Provider_Compute, self.options.provider.upper()))
+		else:
+			self.fail("Could not find cloud provider with name \"%s\"." % self.options.provider)
+
+	def init_connection(self):
+		"""
+		Initialize connection to cloud provider.
+		"""
+		libcloud.security.VERIFY_SSL_CERT = True
+		try:
+			# DNS Service
+			self.driver_dns = self.get_driver_dns()
+			self.connection_dns = self.driver_dns(self.options.user, self.options.key)
+
+			# Balancer Service
+			self.driver_balancer = self.get_driver_balancer()
+			self.connection_balancer = self.driver_balancer(self.options.user, self.options.key)
+
+			# Compute Service
+			self.driver_compute = self.get_driver_compute()
+			self.connection_compute = self.driver_compute(self.options.user, self.options.key)
+		except libcloud.types.InvalidCredsException:
+			self.fail("Invalid or missing credentials for cloud provider.")
+
+	### DISPATCHER
+
+	def dispatch(self):
+		"""
+		Find and execute the command method.
+		"""
+		arguments = copy.copy(self.arguments)
+		options = copy.copy(self.options)
+
+		command = arguments.pop(0) if arguments else 'help'
+		method = self.get_command_method(command)
+		if not method: method = self.cmd_help
+
+		if (method != self.cmd_help):
+			self.init_connection()
+
+		return method(options, arguments)
+
+	def get_command_method(self, command):
+		"""
+		Given a command name, return the command method.
+		"""
+		if not command: return None
+		cmd_formatted = 'cmd_' + command.replace('-', '_')
+		return getattr(self, cmd_formatted, None)
+
+### FORMATTER: docstring
+
+class DocstringHelpFormatter (HelpFormatter):
+	"""
+	Format help based on docstrings.
+	"""
+
+	def __init__(self, indent_increment=2, max_help_position=40, width=None, short_first=1):
+		HelpFormatter.__init__(self, indent_increment, max_help_position, width, short_first)
+
+	def format_usage(self, usage):
+		return ("%s\n") % self.trim(usage)
+
+	def format_heading(self, heading):
+		return "%*s%s:\n" % (self.current_indent, "", heading)
+
+	def trim(self, docstring):
+		"""
+		Trim a doctring to remove indendation, as per PEP 257
+		"""
+		if not docstring:
+			return ''
+		lines = docstring.expandtabs().splitlines()
+		indent = sys.maxint
+		for line in lines[1:]:
+			stripped = line.lstrip()
+			if stripped:
+				indent = min(indent, len(line) - len(stripped))
+		trimmed = [lines[0].strip()]
+		if indent < sys.maxint:
+			for line in lines[1:]:
+				trimmed.append(line[indent:].rstrip())
+		while trimmed and not trimmed[-1]:
+			trimmed.pop()
+		while trimmed and not trimmed[0]:
+			trimmed.pop(0)
+		return '\n'.join(trimmed)
+
+### GLOBAL METHODS
+
+def is_dict_like(obj):
+	"""
+	Check if the object appears to be dictionary-like.
+	"""
+	if obj and (hasattr(obj, '__dict__') or (hasattr(obj, 'keys') and hasattr(obj, '__getitem__'))):
+		return True
+	else:
+		return False
+
+def is_list_like(obj):
+	"""
+	Check if the object appears to be list-like.
+	"""
+	if obj and (not hasattr(obj, 'keys')) and hasattr(obj, '__getitem__'):
+		return True
+	else:
+		return False
+
+### MAIN
+
+def main(argv=None):
+	bc = Skynet()
+	return bc.dispatch()
+
+if __name__ == "__main__":
+	sys.exit(main())

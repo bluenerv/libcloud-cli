@@ -1,0 +1,75 @@
+REQUIRES
+* cloud provider account supported by libcloud
+* python2.7 or newer
+* apache-libcloud 10.1
+
+INSTALL
+* create and tailor ~/.libcloud for your own environment
+* copy lc to a location in your $PATH
+
+USAGE
+lc is a libcloud python cli tool
+
+Usage: lc <command> [options|arguments] ...
+
+Commands:
+  [GENERAL]
+	  help <command>           Return detailed help on command
+
+	[DNS]
+		list-zones               List DNS zones
+		list-zone-records        List DNS zone records
+		create-zone              Create DNS zone
+		create-zone-record       Create DNS zone record
+
+	[BALANCER]
+		list-protocols           List balancer protocols
+		list-balancers           List all balancers
+		list-balancer-members    List all balancer members
+		create-balancer          Create balancer
+		balancer-node-attach     Attach compute node to balancer
+		balancer-member-attach   Attach member to balancer
+		balancer-member-detach   Detach member from balancer
+		destroy-balancer         Destroy balancer
+
+	[COMPUTE]
+		find-node                Find an existing node by name
+		list-locations           List supported cloud locations
+		list-sizes               List all valid server sizes
+		list-images              List all available server images
+		list-nodes               List all existing nodes
+		create-node              Create a new node
+		deploy-node              Create, deploy and bootstrap a new node with custom ssh key
+		destroy-node             Destroy an existing node
+
+	[STORAGE]
+		...
+
+Options:
+	--version                            show program's version number and exit
+	-h, --help                           show this help message and exit
+	-I ID, --id=ID                       ID for zone|balancer|compute node
+	-n NAME, --name=NAME                 Name for zone|balancer|compute node
+	-t TYPE, --type=TYPE                 Type of zone
+	-l TTL, --ttl=TTL                    TTL of zone
+	-e EXTRA, --extra=EXTRA              Extra attributes of zone
+  -p PORT, --port=PORT                 Port of balancer
+	-m MEMBER, --member=MEMBER           Node name of member
+	-P PROTOCOL, --protocol=PROTOCOL     Protocol of balancer [default: http]
+	-a ALGORITHM, --algorithm=ALGORITHM  Algorithm of balancer [default: round-
+				                               robin]
+	-s SIZE, --size=SIZE                 Size of image to create, as MB of RAM
+	-i IMAGE, --image=IMAGE              Name of image to use
+	-w SECONDS, --wait=SECONDS           When creating or finding nodes, wait up
+																			 to WAIT seconds until the node is
+																			 running before returning
+	--human                              Return results in human readable format
+	--json                               Return results in json format
+	--provider=PROVIDER                  Cloud provider to use
+	--user=USER                          API username or id
+	--key=KEY                            API key
+	--public_key=PUBLIC_KEY              Public key to deploy [default:
+																			 ~/.ssh/id_rsa.pub]
+	--script=SCRIPT                      Script to run for deployment
+	--config-file=CONFIG_FILE            Path to a custom configuration file in
+																			 ini format [default: ~/.libcloudrc]
