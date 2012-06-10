@@ -13,37 +13,37 @@ lc is a libcloud python cli tool
 Usage: lc <command> [options|arguments] ...
 
 Commands:
-  [GENERAL]
-	  help <command>           Return detailed help on command
+ [GENERAL]
+   help <command>           Return detailed help on command
 
-	[DNS]
-		list-zones               List DNS zones
-		list-zone-records        List DNS zone records
-		create-zone              Create DNS zone
-		create-zone-record       Create DNS zone record
+ [DNS]
+   list-zones               List DNS zones
+   list-zone-records        List DNS zone records
+   create-zone              Create DNS zone
+   create-zone-record       Create DNS zone record
 
-	[BALANCER]
-		list-protocols           List balancer protocols
-		list-balancers           List all balancers
-		list-balancer-members    List all balancer members
-		create-balancer          Create balancer
-		balancer-node-attach     Attach compute node to balancer
-		balancer-member-attach   Attach member to balancer
-		balancer-member-detach   Detach member from balancer
-		destroy-balancer         Destroy balancer
+ [BALANCER]
+   list-protocols           List balancer protocols
+   list-balancers           List all balancers
+   list-balancer-members    List all balancer members
+   create-balancer          Create balancer
+   balancer-node-attach     Attach compute node to balancer
+   balancer-member-attach   Attach member to balancer
+   balancer-member-detach   Detach member from balancer
+   destroy-balancer         Destroy balancer
 
-	[COMPUTE]
-		find-node                Find an existing node by name
-		list-locations           List supported cloud locations
-		list-sizes               List all valid server sizes
-		list-images              List all available server images
-		list-nodes               List all existing nodes
-		create-node              Create a new node
-		deploy-node              Create, deploy and bootstrap a new node with custom ssh key
-		destroy-node             Destroy an existing node
+ [COMPUTE]
+   find-node                Find an existing node by name
+   list-locations           List supported cloud locations
+   list-sizes               List all valid server sizes
+   list-images              List all available server images
+   list-nodes               List all existing nodes
+   create-node              Create a new node
+   deploy-node              Create, deploy and bootstrap a new node with custom ssh key
+   destroy-node             Destroy an existing node
 
-	[STORAGE]
-		...
+[STORAGE]
+   ...
 
 Options:
 	--version                            show program's version number and exit
@@ -53,7 +53,7 @@ Options:
 	-t TYPE, --type=TYPE                 Type of zone
 	-l TTL, --ttl=TTL                    TTL of zone
 	-e EXTRA, --extra=EXTRA              Extra attributes of zone
-  -p PORT, --port=PORT                 Port of balancer
+	-p PORT, --port=PORT                 Port of balancer
 	-m MEMBER, --member=MEMBER           Node name of member
 	-P PROTOCOL, --protocol=PROTOCOL     Protocol of balancer [default: http]
 	-a ALGORITHM, --algorithm=ALGORITHM  Algorithm of balancer [default: round-
